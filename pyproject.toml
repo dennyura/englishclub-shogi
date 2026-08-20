@@ -1,0 +1,50 @@
+[project]
+name = "shogi-ai"
+version = "1.0.0"
+description = "Claude Codeで作る将棋AI — PyTorch×強化学習×バイブコーディング実践入門"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+authors = [{ name = "Yosuke Morikawa" }]
+dependencies = [
+    "torch>=2.10",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+]
+
+[project.scripts]
+shogi-ai = "shogi_ai.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0",
+    "ruff>=0.15",
+    "httpx>=0.28",
+    "mypy>=1.19.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shogi_ai"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["slow: marks tests as slow (training, GPU, multi-game)"]
+
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 99
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = false
+ignore_missing_imports = true
+check_untyped_defs = true

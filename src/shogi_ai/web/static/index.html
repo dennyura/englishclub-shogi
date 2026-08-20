@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>将棋AI</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>将棋AI</h1>
+
+        <!-- タブナビゲーション -->
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('game')">対局</button>
+            <button class="tab" onclick="showTab('training')">訓練</button>
+        </div>
+
+        <!-- 対局タブ -->
+        <div id="tab-game" class="tab-content">
+            <div class="controls">
+                <div class="control-group">
+                    <label class="control-label">ゲーム種別</label>
+                    <select id="game-type">
+                        <option value="animal">どうぶつしょうぎ (3×4)</option>
+                        <option value="full">本将棋 (9×9)</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label class="control-label">先手</label>
+                    <select id="sente-type">
+                        <option value="human">人間（あなた）</option>
+                        <option value="random">Random AI</option>
+                        <option value="minimax">Minimax AI</option>
+                        <option value="mcts">MCTS AI (NN)</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label class="control-label">後手</label>
+                    <select id="ai-type">
+                        <option value="minimax">Minimax AI</option>
+                        <option value="random">Random AI</option>
+                        <option value="mcts">MCTS AI (NN)</option>
+                    </select>
+                </div>
+                <button id="new-game-btn">新規対局</button>
+            </div>
+
+            <!-- 観戦モードコントロール（先手もAIの場合に表示） -->
+            <div id="auto-play-controls" class="auto-play-controls" style="display:none">
+                <span class="auto-play-label">🎬 観戦モード</span>
+                <select id="auto-play-speed" onchange="setAutoPlaySpeed()">
+                    <option value="1000">遅い (1秒/手)</option>
+                    <option value="600" selected>普通 (0.6秒/手)</option>
+                    <option value="200">速い (0.2秒/手)</option>
+                    <option value="50">最速</option>
+                </select>
+                <button id="auto-play-btn" onclick="toggleAutoPlay()">⏸ 一時停止</button>
+            </div>
+
+            <div class="game-layout">
+                <div class="game-area">
+                    <div class="hand" id="gote-hand">
+                        <div class="hand-label">後手 持駒</div>
+                        <div class="hand-pieces">-</div>
+                    </div>
+
+                    <div id="board" class="board animal"></div>
+
+                    <div class="hand" id="sente-hand">
+                        <div class="hand-label">先手 持駒</div>
+                        <div class="hand-pieces">-</div>
+                    </div>
+                </div>
+
+                <!-- 駒の動き説明パネル -->
+                <div class="rules-panel" id="rules-panel">
+
+                    <!-- どうぶつしょうぎ用 -->
+                    <div id="rules-animal">
+                        <div class="rules-title">どうぶつしょうぎ 駒の動き</div>
+
+                        <div class="piece-rules-grid">
+                            <div class="piece-rule">
+                                <div class="piece-name">🦁 ライオン</div>
+                                <div class="mg">
+                                    <div class="m"></div><div class="m"></div><div class="m"></div>
+                                    <div class="m"></div><div class="p">ラ</div><div class="m"></div>
+                                    <div class="m"></div><div class="m"></div><div class="m"></div>
+                                </div>
+                                <div class="piece-desc-short">全8方向</div>
+                            </div>
+
+                            <div class="piece-rule">
+                                <div class="piece-name">🦒 キリン</div>
+                                <div class="mg">
+                                    <div></div><div class="m"></div><div></div>
+                                    <div class="m"></div><div class="p">キ</div><div class="m"></div>
+                                    <div></div><div class="m"></div><div></div>
+                                </div>
+                                <div class="piece-desc-short">縦横4方向</div>
+                            </div>
+
+                            <div class="piece-rule">
+                                <div class="piece-name">🐘 ゾウ</div>
+                                <div class="mg">
+                                    <div class="m"></div><div></div><div class="m"></div>
+                                    <div></div><div class="p">ゾ</div><div></div>
+                                    <div class="m"></div><div></div><div class="m"></div>
+                                </div>
+                                <div class="piece-desc-short">斜め4方向</div>
+                            </div>
+
+                            <div class="piece-rule">
+                                <div class="piece-name">🐥 ヒヨコ</div>
+                                <div class="mg">
+                                    <div></div><div class="m"></div><div></div>
+                                    <div></div><div class="p">ヒ</div><div></div>
+                                    <div></div><div></div><div></div>
+                                </div>
+                                <div class="piece-desc-short">前1マス</div>
+                            </div>
+
+                            <div class="piece-rule">
+                                <div class="piece-name">🐔 ニワトリ</div>
+                                <div class="mg">
+                                    <div class="m"></div><div class="m"></div><div class="m"></div>
+                                    <div class="m"></div><div class="p">ニ</div><div class="m"></div>
+                                    <div></div><div class="m"></div><div></div>
+                                </div>
+                                <div class="piece-desc-short">6方向<br>（斜め後ろ除く）</div>
+                            </div>
+
+                            <div></div><!-- グリッド余白 -->
+                        </div>
+
+                        <ul class="rules-list">
+                            <li>ライオンは取られると負け。敵陣到達でトライ勝ち。</li>
+                            <li>ヒヨコは敵陣到達でニワトリに成る。持駒に戻るとヒヨコに戻る。</li>
+                            <li>打ち駒はヒヨコ・キリン・ゾウのみ（ライオン・ニワトリは不可）。</li>
+                        </ul>
+                    </div>
+
+                    <!-- 本将棋用 -->
+                    <div id="rules-full" style="display:none">
+                        <div class="rules-title">本将棋 主な駒の動き</div>
+                        <table class="rules-table">
+                            <thead>
+                                <tr><th>駒</th><th>動き</th><th>成り</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>王将 / 玉将</td><td>全8方向に1マス</td><td>なし</td></tr>
+                                <tr><td>飛車</td><td>縦・横に何マスでも</td><td>龍王（全8方向＋縦横）</td></tr>
+                                <tr><td>角行</td><td>斜めに何マスでも</td><td>龍馬（全8方向＋斜め）</td></tr>
+                                <tr><td>金将</td><td>前・前斜め・横・真後ろ</td><td>なし</td></tr>
+                                <tr><td>銀将</td><td>前・前後斜めの5方向</td><td>金将と同じ動き</td></tr>
+                                <tr><td>桂馬</td><td>前方へ「2歩前・1マス横」の跳び</td><td>金将と同じ動き</td></tr>
+                                <tr><td>香車</td><td>前方に何マスでも（真っ直ぐのみ）</td><td>金将と同じ動き</td></tr>
+                                <tr><td>歩兵</td><td>前方に1マス</td><td>と金（金将と同じ動き）</td></tr>
+                            </tbody>
+                        </table>
+                        <div class="rules-note">
+                            <strong>成りのルール：</strong>相手の陣地（上から3段目以内）に入るか、そこから出るときに成れます。桂馬・香車・歩兵は最奥に到達したときは必ず成る必要があります。
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <div id="status" class="status">新規対局を開始してください</div>
+
+            <div id="legal-moves" style="display:flex;flex-wrap:wrap;justify-content:center;margin-top:10px;"></div>
+
+            <div id="move-list" class="move-list"></div>
+        </div>
+
+        <!-- 訓練タブ -->
+        <div id="tab-training" class="tab-content" style="display:none">
+            <div class="train-controls">
+                <select id="train-game-type" onchange="onTrainGameTypeChange()">
+                    <option value="animal">どうぶつしょうぎ（速い・推奨）</option>
+                    <option value="full">本将棋（遅い）</option>
+                </select>
+                <label class="train-label">
+                    世代数:
+                    <input type="number" id="train-generations" value="3" min="1" max="100">
+                </label>
+                <button id="train-start-btn" onclick="startTraining()">訓練開始</button>
+                <button id="train-stop-btn" onclick="stopTraining()" disabled>停止</button>
+            </div>
+
+            <div id="train-status-bar" class="train-status-bar" style="display:none">
+                <div class="train-phase-label" id="train-phase-label">準備中...</div>
+                <div class="progress-bar-outer">
+                    <div class="progress-bar-inner" id="progress-bar" style="width:0%"></div>
+                </div>
+                <div class="train-gen-label" id="train-gen-label">0 / 0 世代</div>
+            </div>
+
+            <div id="train-results-area" style="display:none">
+                <div class="train-section-title">世代別結果</div>
+                <table class="train-table">
+                    <thead>
+                        <tr>
+                            <th>世代</th>
+                            <th>局面数</th>
+                            <th>方策損失</th>
+                            <th>価値損失</th>
+                            <th>新モデル勝利</th>
+                            <th>旧モデル勝利</th>
+                            <th>引き分け</th>
+                            <th>勝率</th>
+                            <th>採用</th>
+                        </tr>
+                    </thead>
+                    <tbody id="train-table-body"></tbody>
+                </table>
+            </div>
+
+            <div id="train-done-area" class="train-done-area" style="display:none">
+                <div class="train-done-msg" id="train-done-msg">訓練完了！</div>
+                <button class="load-btn" onclick="loadTrainedModel()">
+                    訓練済みモデルで対局する
+                </button>
+            </div>
+
+            <div class="train-log" id="train-log"></div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
