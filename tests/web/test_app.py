@@ -34,6 +34,22 @@ class TestNewGame:
         res = client.post("/api/new-game", json={"game_type": "chess"})
         assert res.status_code == 400
 
+    def test_mcts_requires_trained_model(self, client: TestClient, tmp_path) -> None:
+        import os
+
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            res = client.post(
+                "/api/new-game",
+                json={"game_type": "animal", "ai_type": "mcts"},
+            )
+        finally:
+            os.chdir(original_cwd)
+
+        assert res.status_code == 503
+        assert "best_model_animal.pt" in res.json()["detail"]
+
 
 class TestMakeMove:
     def test_valid_move(self, client: TestClient) -> None:

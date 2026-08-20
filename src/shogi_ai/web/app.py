@@ -60,10 +60,6 @@ _train_state: dict[str, Any] = {
     "progress_queue": None,
 }
 
-# ゲーム種別ごとの訓練済みモデルパス（/api/train/load で更新）
-_trained_model_paths: dict[str, str] = {}
-
-
 class NewGameRequest(BaseModel):
     """新規対局リクエストのスキーマ。"""
 
@@ -107,11 +103,14 @@ def _get_ai_fn(
         # ゲーム種別に応じたネットワーク設定を選択
         config = ANIMAL_SHOGI_CONFIG if game_type == "animal" else FULL_SHOGI_CONFIG
         net = DualHeadNetwork(config)
-        # 訓練済みモデルが存在すれば読み込む（なければランダム初期化のまま）
-        model_path_str = _trained_model_paths.get(game_type)
-        if model_path_str and Path(model_path_str).exists():
-            state_dict = torch.load(model_path_str, map_location="cpu", weights_only=True)
-            net.load_state_dict(state_dict)
+        model_path = Path(f"best_model_{game_type}.pt")
+        if not model_path.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=f"{model_path} が見つからないため、MCTS AI との対局を開始できません。",
+            )
+        state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
+        net.load_state_dict(state_dict)
         net.eval()  # 推論モード
         mcts = MCTS(net, MCTSConfig(num_simulations=50))
 
@@ -408,7 +407,6 @@ async def train_load(req: NewGameRequest) -> dict[str, Any]:
     model_path = f"best_model_{req.game_type}.pt"
     if not Path(model_path).exists():
         raise HTTPException(404, f"No trained model found: {model_path}")
-    _trained_model_paths[req.game_type] = model_path
     return {"status": "loaded", "model_path": model_path, "game_type": req.game_type}
 
 

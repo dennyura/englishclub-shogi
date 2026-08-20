@@ -58,6 +58,13 @@ async function newGame() {
         body: JSON.stringify({ game_type: gameType, ai_type: aiType, sente_type: senteType }),
     });
     const data = await res.json();
+    if (!res.ok) {
+        gameId = null;
+        gameState = null;
+        document.getElementById('auto-play-controls').style.display = 'none';
+        alert(data.detail || '対局を開始できませんでした');
+        return;
+    }
     gameId = data.game_id;
     gameState = data.state;
     selectedSquare = null;
