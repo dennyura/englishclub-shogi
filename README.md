@@ -1,6 +1,6 @@
 # shogi-ai-pytorch
 
-「Claude Codeで作る将棋AI — PyTorch×強化学習×バイブコーディング実践入門」のコンパニオンリポジトリです。ああああああああああああこんにちは
+「Claude Codeで作る将棋AI — PyTorch×強化学習×バイブコーディング実践入門」のコンパニオンリポジトリです。ああああああああああああこんにちはkaggle
 
 📖 **書籍はこちら**: [Claude Codeで作る将棋AI — PyTorch×強化学習×バイブコーディング実践入門](https://www.amazon.co.jp/dp/B0GQQXV8V8)
 
