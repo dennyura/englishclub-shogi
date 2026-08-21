@@ -112,7 +112,7 @@ def _get_ai_fn(
         state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
         net.load_state_dict(state_dict)
         net.eval()  # 推論モード
-        mcts = MCTS(net, MCTSConfig(num_simulations=50))
+        mcts = MCTS(net, MCTSConfig(num_simulations=50))  # 1手あたりのシミュレーション回数を増やすと強くなる
 
         def mcts_move(state: GameState) -> int:
             probs = mcts.search(state)
