@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import random
+from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import torch
@@ -20,7 +22,31 @@ class TrainerConfig:
     weight_decay: float = 1e-4  # L2 正則化係数（過学習防止）
     batch_size: int = 64  # ミニバッチサイズ
     epochs_per_generation: int = 10  # 1世代あたりのエポック数
-    buffer_size: int = 10000  # リプレイバッファの最大サイズ
+    buffer_size: int = 30000  # リプレイバッファの最大サイズ
+    samples_per_generation: int = 3000  # 1世代あたりの学習サンプル数
+
+
+class ReplayBuffer:
+    """Keep self-play examples across generations and sample them randomly."""
+
+    def __init__(self, max_size: int) -> None:
+        if max_size <= 0:
+            raise ValueError("max_size must be positive")
+        self._examples: deque[TrainingExample] = deque(maxlen=max_size)
+
+    def add(self, examples: Iterable[TrainingExample]) -> None:
+        """Append examples, evicting the oldest ones after reaching capacity."""
+        self._examples.extend(examples)
+
+    def sample(self, size: int) -> list[TrainingExample]:
+        """Return up to ``size`` distinct randomly selected examples."""
+        if size <= 0:
+            raise ValueError("size must be positive")
+        sample_size = min(size, len(self._examples))
+        return random.sample(list(self._examples), sample_size)
+
+    def __len__(self) -> int:
+        return len(self._examples)
 
 
 class Trainer:

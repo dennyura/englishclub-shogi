@@ -16,7 +16,7 @@ from shogi_ai.training.self_play import (
     TrainingExample,
     generate_training_data,
 )
-from shogi_ai.training.trainer import Trainer, TrainerConfig
+from shogi_ai.training.trainer import ReplayBuffer, Trainer, TrainerConfig
 
 
 def _make_network() -> DualHeadNetwork:
@@ -57,6 +57,26 @@ class TestTrainer:
         trainer = Trainer(net, TrainerConfig(), device)
         losses = trainer.train([])
         assert losses["total_loss"] == 0.0
+
+
+class TestReplayBuffer:
+    def test_keeps_latest_examples_up_to_capacity(self) -> None:
+        buffer = ReplayBuffer(max_size=2)
+        examples = [
+            TrainingExample(torch.zeros(1), torch.zeros(1), float(value))
+            for value in range(3)
+        ]
+
+        buffer.add(examples)
+
+        assert len(buffer) == 2
+        assert {example.value_target for example in buffer.sample(2)} == {1.0, 2.0}
+
+    def test_samples_all_available_examples_when_buffer_is_smaller(self) -> None:
+        buffer = ReplayBuffer(max_size=10)
+        buffer.add([TrainingExample(torch.zeros(1), torch.zeros(1), 1.0)])
+
+        assert len(buffer.sample(3000)) == 1
 
 
 class TestArena:

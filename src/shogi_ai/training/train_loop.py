@@ -13,8 +13,10 @@ AlphaZeroの学習は次のサイクルを繰り返す:
 from __future__ import annotations
 
 import copy
+import logging
 import queue
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +30,9 @@ from shogi_ai.model.config import NetworkConfig
 from shogi_ai.model.network import DualHeadNetwork
 from shogi_ai.training.arena import pit
 from shogi_ai.training.self_play import SelfPlayConfig, generate_training_data
-from shogi_ai.training.trainer import Trainer, TrainerConfig
+from shogi_ai.training.trainer import ReplayBuffer, Trainer, TrainerConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,11 @@ class TrainLoopConfig:
         num_simulations:      MCTSシミュレーション数（多いほど強いが遅い）
         arena_games:          アリーナ対戦数（新旧比較、偶数推奨）
         win_rate_threshold:   新モデル採用の勝率閾値（55%以上で採用）
+        buffer_size:          リプレイバッファの最大局面数
+        samples_per_generation: 1世代あたりの学習サンプル数
+        batch_size:           学習時のミニバッチサイズ
+        epochs_per_generation: 1世代あたりの学習エポック数
+        max_training_hours:   学習時間の上限（時間、Noneで無制限）
         model_path:           最良モデルの保存先パス
     """
 
@@ -49,6 +58,11 @@ class TrainLoopConfig:
     num_simulations: int = 25
     arena_games: int = 10
     win_rate_threshold: float = 0.55
+    buffer_size: int = 30000
+    samples_per_generation: int = 3000
+    batch_size: int = 64
+    epochs_per_generation: int = 10
+    max_training_hours: float | None = None
     model_path: str = "best_model.pt"
 
 
@@ -97,25 +111,56 @@ def run_training(
     進捗は progress_queue に dict を入れて Web UI（SSE）に伝える。
     stop_event がセットされれば途中で安全に終了する。
     """
+    if loop_config.max_training_hours is not None and loop_config.max_training_hours <= 0:
+        raise ValueError("max_training_hours must be positive or None")
+
+    model_path = Path(loop_config.model_path)
+    if not model_path.is_file():
+        message = f"Training stopped: model file was not found: {model_path}"
+        logger.error(message)
+        progress_queue.put(
+            {
+                "type": "done",
+                "reason": "model_not_found",
+                "message": message,
+            }
+        )
+        return
+
+    started_at = time.monotonic()
+
+    def time_limit_reached() -> bool:
+        if loop_config.max_training_hours is None:
+            return False
+        return time.monotonic() - started_at >= loop_config.max_training_hours * 3600
+
     device = _get_device()
 
     # 最良モデルを初期化（または保存済みモデルから続きを再開）
     best_network = DualHeadNetwork(network_config).to(device)
-    model_path = Path(loop_config.model_path)
-    if model_path.exists():
-        state_dict = torch.load(model_path, map_location=device, weights_only=True)
-        best_network.load_state_dict(state_dict)
+    state_dict = torch.load(model_path, map_location=device, weights_only=True)
+    best_network.load_state_dict(state_dict)
 
-    trainer_config = TrainerConfig()
+    trainer_config = TrainerConfig(
+        buffer_size=loop_config.buffer_size,
+        samples_per_generation=loop_config.samples_per_generation,
+        batch_size=loop_config.batch_size,
+        epochs_per_generation=loop_config.epochs_per_generation,
+    )
+    replay_buffer = ReplayBuffer(trainer_config.buffer_size)
     self_play_config = SelfPlayConfig(
         num_games=loop_config.num_self_play_games,
         num_simulations=loop_config.num_simulations,
     )
 
+    termination_reason = "generation_limit"
     for generation in range(loop_config.num_generations):
         if stop_event.is_set():
             progress_queue.put({"type": "stopped"})
             return
+        if time_limit_reached():
+            termination_reason = "time_limit"
+            break
 
         # ── Phase 1: 自己対局 ──────────────────────────────────────────
         progress_queue.put(
@@ -129,6 +174,8 @@ def run_training(
 
         best_network.eval()
         data = generate_training_data(best_network, initial_state, self_play_config)
+        replay_buffer.add(data)
+        sampled_data = replay_buffer.sample(trainer_config.samples_per_generation)
 
         if stop_event.is_set():
             progress_queue.put({"type": "stopped"})
@@ -141,13 +188,14 @@ def run_training(
                 "generation": generation + 1,
                 "total": loop_config.num_generations,
                 "phase": "training",
-                "data_size": len(data),
+                "data_size": len(sampled_data),
+                "buffer_size": len(replay_buffer),
             }
         )
 
         new_network = copy.deepcopy(best_network).to(device)
         trainer = Trainer(new_network, trainer_config, device)
-        losses = trainer.train(data)
+        losses = trainer.train(sampled_data)
 
         if stop_event.is_set():
             progress_queue.put({"type": "stopped"})
@@ -195,8 +243,30 @@ def run_training(
                 "draws": draws,
                 "win_rate": round(win_rate, 3),
                 "adopted": adopted,
-                "data_size": len(data),
+                "data_size": len(sampled_data),
+                "buffer_size": len(replay_buffer),
             }
         )
+        logger.info(
+            "Generation %d/%d completed: policy_loss=%.4f, value_loss=%.4f, "
+            "total_loss=%.4f, new_wins=%d, old_wins=%d, draws=%d, win_rate=%.3f, "
+            "adopted=%s, data_size=%d, buffer_size=%d",
+            generation + 1,
+            loop_config.num_generations,
+            losses["policy_loss"],
+            losses["value_loss"],
+            losses["total_loss"],
+            new_wins,
+            old_wins,
+            draws,
+            win_rate,
+            adopted,
+            len(sampled_data),
+            len(replay_buffer),
+        )
 
-    progress_queue.put({"type": "done"})
+        if time_limit_reached():
+            termination_reason = "time_limit"
+            break
+
+    progress_queue.put({"type": "done", "reason": termination_reason})
