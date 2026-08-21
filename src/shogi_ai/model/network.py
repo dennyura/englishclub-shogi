@@ -3,9 +3,28 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 from shogi_ai.model.config import NetworkConfig
+
+
+class HorizontalCircularConv(nn.Module):
+    """3x3 convolution with horizontal circular padding only."""
+
+    def __init__(self, in_channels: int, out_channels: int) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=(1, 0),
+            bias=False,
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = F.pad(x, (1, 1, 0, 0), mode="circular")
+        return self.conv(x)
 
 
 class ResBlock(nn.Module):
@@ -21,9 +40,9 @@ class ResBlock(nn.Module):
     def __init__(self, channels: int) -> None:
         super().__init__()
         # 3×3 畳み込み（padding=1 でサイズを維持）
-        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.conv1 = HorizontalCircularConv(channels, channels)
         self.bn1 = nn.BatchNorm2d(channels)  # バッチ正規化（学習安定化）
-        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.conv2 = HorizontalCircularConv(channels, channels)
         self.bn2 = nn.BatchNorm2d(channels)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -61,12 +80,9 @@ class DualHeadNetwork(nn.Module):
         self.config = config
 
         # 入力射影: チャンネル数を in_channels → num_channels に変換
-        self.input_conv = nn.Conv2d(
+        self.input_conv = HorizontalCircularConv(
             config.in_channels,
             config.num_channels,
-            3,
-            padding=1,
-            bias=False,
         )
         self.input_bn = nn.BatchNorm2d(config.num_channels)
 

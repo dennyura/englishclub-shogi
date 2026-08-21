@@ -54,6 +54,6 @@ FULL_SHOGI_CONFIG = NetworkConfig(
     board_w=9,
     in_channels=43,
     action_size=13689,  # ACTION_SPACE in full_shogi/moves.py と一致
-    num_res_blocks=5,  # 大きいゲームなので深いネットワーク
+    num_res_blocks=10,  # 大きいゲームなので深いネットワーク
     num_channels=128,
 )

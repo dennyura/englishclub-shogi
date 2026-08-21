@@ -5,7 +5,21 @@ from __future__ import annotations
 import torch
 
 from shogi_ai.model.config import ANIMAL_SHOGI_CONFIG, FULL_SHOGI_CONFIG, NetworkConfig
-from shogi_ai.model.network import DualHeadNetwork, ResBlock
+from shogi_ai.model.network import DualHeadNetwork, HorizontalCircularConv, ResBlock
+
+
+class TestHorizontalCircularConv:
+    def test_wraps_left_and_right_without_wrapping_top_and_bottom(self) -> None:
+        conv = HorizontalCircularConv(1, 1)
+        conv.conv.weight.data.zero_()
+        conv.conv.weight.data[0, 0, 1, 0] = 1.0
+        x = torch.zeros(1, 1, 3, 4)
+        x[0, 0, 1, 3] = 1.0
+
+        out = conv(x)
+
+        assert out[0, 0, 1, 0] == 1.0
+        assert out[0, 0, 0, 0] == 0.0
 
 
 class TestResBlock:

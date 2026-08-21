@@ -18,7 +18,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +51,7 @@ class TrainLoopConfig:
         epochs_per_generation: 1世代あたりの学習エポック数
         max_training_hours:   学習時間の上限（時間、Noneで無制限）
         model_path:           最良モデルの保存先パス
+        num_res_blocks:       残差ブロック数（Noneならnetwork_configの値を使用）
     """
 
     num_generations: int = 10
@@ -64,6 +65,7 @@ class TrainLoopConfig:
     epochs_per_generation: int = 10
     max_training_hours: float | None = None
     model_path: str = "best_model.pt"
+    num_res_blocks: int | None = None
 
 
 def _get_device() -> torch.device:
@@ -93,6 +95,16 @@ def _make_mcts_fn(
     return fn
 
 
+def _resolve_network_config(
+    network_config: NetworkConfig,
+    loop_config: TrainLoopConfig,
+) -> NetworkConfig:
+    """Apply loop-level network overrides while preserving other settings."""
+    if loop_config.num_res_blocks is None:
+        return network_config
+    return replace(network_config, num_res_blocks=loop_config.num_res_blocks)
+
+
 def run_training(
     initial_state: GameState,
     network_config: NetworkConfig,
@@ -113,6 +125,8 @@ def run_training(
     """
     if loop_config.max_training_hours is not None and loop_config.max_training_hours <= 0:
         raise ValueError("max_training_hours must be positive or None")
+    if loop_config.num_res_blocks is not None and loop_config.num_res_blocks <= 0:
+        raise ValueError("num_res_blocks must be positive or None")
 
     model_path = Path(loop_config.model_path)
     if not model_path.is_file():
@@ -135,6 +149,8 @@ def run_training(
         return time.monotonic() - started_at >= loop_config.max_training_hours * 3600
 
     device = _get_device()
+
+    network_config = _resolve_network_config(network_config, loop_config)
 
     # 最良モデルを初期化（または保存済みモデルから続きを再開）
     best_network = DualHeadNetwork(network_config).to(device)
