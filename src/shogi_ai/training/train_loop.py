@@ -305,21 +305,13 @@ def run_training(
             }
         )
         generation_log = (
-            "Generation %d/%d completed: policy_loss=%.4f, value_loss=%.4f, "
-            "total_loss=%.4f, new_wins=%d, old_wins=%d, draws=%d, win_rate=%.3f, "
-            "adopted=%s, data_size=%d, buffer_size=%d",
-            generation + 1,
-            loop_config.num_generations,
-            losses["policy_loss"],
-            losses["value_loss"],
-            losses["total_loss"],
-            new_wins,
-            old_wins,
-            draws,
-            win_rate,
-            adopted,
-            len(sampled_data),
-            len(replay_buffer),
+            f"Generation {generation + 1}/{loop_config.num_generations} completed: "
+            f"policy_loss={losses['policy_loss']:.4f}, "
+            f"value_loss={losses['value_loss']:.4f}, "
+            f"total_loss={losses['total_loss']:.4f}, "
+            f"new_wins={new_wins}, old_wins={old_wins}, draws={draws}, "
+            f"win_rate={win_rate:.3f}, adopted={adopted}, "
+            f"data_size={len(sampled_data)}, buffer_size={len(replay_buffer)}"
         )
         log_lines.append(generation_log)
         logger.info(generation_log)
