@@ -118,6 +118,95 @@ class MCTS:
 
         return action_probs
 
+    def search_batch(self, states: list[GameState]) -> list[list[float]]:
+        """Run MCTS for several states, batching neural-network evaluations."""
+        if not states:
+            return []
+
+        roots = [MCTSNode() for _ in states]
+        legal_moves = [state.legal_moves() for state in states]
+        active = [index for index, legal in enumerate(legal_moves) if legal]
+        if not active:
+            return [[0.0] * state.action_space_size for state in states]
+
+        root_policies, _ = self._evaluate_batch(
+            [states[index] for index in active],
+            [legal_moves[index] for index in active],
+        )
+        for index, policy in zip(active, root_policies):
+            for move in legal_moves[index]:
+                roots[index].children[move] = MCTSNode(prior=policy[move])
+            self._add_dirichlet_noise(roots[index], legal_moves[index])
+
+        for _ in range(self.config.num_simulations):
+            leaves: list[tuple[int, GameState, MCTSNode, list[MCTSNode], int]] = []
+            for index in active:
+                node = roots[index]
+                state = states[index]
+                path: list[MCTSNode] = []
+                sign = 1
+                while not state.is_terminal and node.children:
+                    move = self._select_child(node)
+                    child = node.children[move]
+                    path.append(child)
+                    state = state.apply_move(move)
+                    node = child
+                    sign = -sign
+                leaves.append((index, state, node, path, sign))
+
+            expandable = [
+                item for item in leaves if not item[1].is_terminal and not item[2].children
+            ]
+            if expandable:
+                policies, values = self._evaluate_batch(
+                    [item[1] for item in expandable],
+                    [item[1].legal_moves() for item in expandable],
+                )
+                expanded = dict(zip((item[0] for item in expandable), zip(policies, values)))
+            else:
+                expanded = {}
+
+            for index, state, node, path, sign in leaves:
+                if state.is_terminal:
+                    value = self._terminal_value(state)
+                else:
+                    policy, value = expanded[index]
+                    for move in state.legal_moves():
+                        node.children[move] = MCTSNode(prior=policy[move])
+                for child in reversed(path):
+                    value = -value
+                    child.visit_count += 1
+                    child.total_value += value
+
+        return [
+            self._root_action_probs(root, state.action_space_size)
+            for root, state in zip(roots, states)
+        ]
+
+    def _root_action_probs(self, root: MCTSNode, action_space_size: int) -> list[float]:
+        """Convert one root's visit counts into an action distribution."""
+        action_probs = [0.0] * action_space_size
+        if not root.children:
+            return action_probs
+        if self.config.temperature == 0:
+            best_move = max(root.children, key=lambda m: root.children[m].visit_count)
+            action_probs[best_move] = 1.0
+            return action_probs
+        total = sum(
+            child.visit_count ** (1.0 / self.config.temperature)
+            for child in root.children.values()
+        )
+        if total > 0:
+            for move, child in root.children.items():
+                action_probs[move] = child.visit_count ** (1.0 / self.config.temperature) / total
+        return action_probs
+
+    def _terminal_value(self, state: GameState) -> float:
+        """Return a terminal value from the current player's perspective."""
+        if state.winner is None:
+            return 0.0
+        return 1.0 if state.winner == state.current_player else -1.0
+
     def _simulate(self, node: MCTSNode, state: GameState) -> float:
         """Run one simulation from the given node/state. Returns value.
 
@@ -215,6 +304,26 @@ class MCTS:
         value = value_tensor.item()
 
         return probs, value
+
+    def _evaluate_batch(
+        self,
+        states: list[GameState],
+        legal_moves: list[list[int]],
+    ) -> tuple[list[list[float]], list[float]]:
+        """Evaluate several leaf states in one network forward pass."""
+        if not states:
+            return [], []
+        tensors = torch.stack([state.to_tensor_planes() for state in states]).to(self.device)
+        self.network.eval()
+        with torch.inference_mode():
+            policy_logits, value_tensor = self.network(tensors)
+
+        policies: list[list[float]] = []
+        for logits, legal in zip(policy_logits, legal_moves):
+            mask = torch.full_like(logits, float("-inf"))
+            mask[legal] = logits[legal]
+            policies.append(torch.softmax(mask, dim=0).cpu().tolist())
+        return policies, value_tensor[:, 0].cpu().tolist()
 
     def _add_dirichlet_noise(
         self,

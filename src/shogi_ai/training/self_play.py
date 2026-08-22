@@ -40,6 +40,7 @@ class SelfPlayConfig:
     num_simulations: int = 50
     temperature_threshold: int = 10  # この手数以降は温度を下げて最善手を選ぶ
     max_moves: int = 200
+    batch_size: int = 8
 
 
 class _SelfPlayTask(NamedTuple):
@@ -70,7 +71,6 @@ def play_game(
 
     Temperature schedule:
     - First `temperature_threshold` moves: τ=1.0 (exploratory)
-    - After that: τ→0 (deterministic, pick best)
     """
     examples: list[tuple[Tensor, Tensor, int]] = []
     mcts_config = MCTSConfig(num_simulations=config.num_simulations)
@@ -120,6 +120,67 @@ def play_game(
         result.append(TrainingExample(tensor, policy, value))
 
     return result
+
+
+def play_games_batched(
+    network: DualHeadNetwork,
+    initial_state: GameState,
+    config: SelfPlayConfig,
+    num_games: int,
+) -> list[TrainingExample]:
+    """Play several games together, batching MCTS neural evaluations."""
+    if num_games <= 0:
+        raise ValueError("num_games must be positive")
+    if config.batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
+    states = [initial_state for _ in range(num_games)]
+    records: list[list[tuple[Tensor, Tensor, int]]] = [[] for _ in states]
+    move_counts = [0] * num_games
+    mcts = MCTS(network, MCTSConfig(num_simulations=config.num_simulations))
+
+    while any(
+        not state.is_terminal and count < config.max_moves
+        for state, count in zip(states, move_counts)
+    ):
+        active = [
+            index
+            for index, (state, count) in enumerate(zip(states, move_counts))
+            if not state.is_terminal and count < config.max_moves
+        ]
+        for batch_start in range(0, len(active), config.batch_size):
+            batch_indices = active[batch_start : batch_start + config.batch_size]
+            batch_states = [states[index] for index in batch_indices]
+            temperature = (
+                1.0
+                if move_counts[batch_indices[0]] < config.temperature_threshold
+                else 0.01
+            )
+            mcts.config = MCTSConfig(
+                num_simulations=config.num_simulations,
+                temperature=temperature,
+            )
+            batch_probs = mcts.search_batch(batch_states)
+            for index, action_probs in zip(batch_indices, batch_probs):
+                state = states[index]
+                policy = torch.tensor(action_probs, dtype=torch.float32)
+                records[index].append((state.to_tensor_planes(), policy, state.current_player))
+                move = _select_move(action_probs, state.legal_moves())
+                states[index] = state.apply_move(move)
+                move_counts[index] += 1
+
+    examples: list[TrainingExample] = []
+    for state, game_records in zip(states, records):
+        winner = state.winner
+        for state_tensor, policy, player in game_records:
+            if winner is None:
+                value = 0.0
+            elif winner == player:
+                value = 1.0
+            else:
+                value = -1.0
+            examples.append(TrainingExample(state_tensor, policy, value))
+    return examples
 
 
 def generate_training_data(
@@ -185,10 +246,7 @@ def _self_play_worker(task: _SelfPlayTask) -> list[TrainingExample]:
     network.load_state_dict(task.state_dict)
     network.eval()
 
-    examples: list[TrainingExample] = []
-    for _ in range(task.num_games):
-        examples.extend(play_game(network, task.initial_state, task.config))
-    return examples
+    return play_games_batched(network, task.initial_state, task.config, task.num_games)
 
 
 def _select_move(action_probs: list[float], legal_moves: list[int]) -> int:

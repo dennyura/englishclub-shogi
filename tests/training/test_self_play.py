@@ -12,6 +12,7 @@ from shogi_ai.training.self_play import (
     TrainingExample,
     generate_training_data,
     play_game,
+    play_games_batched,
 )
 
 
@@ -63,6 +64,14 @@ class TestPlayGame:
         values = [ex.value_target for ex in examples]
         assert any(v != 0.0 for v in values) or len(values) == 0
 
+    def test_batched_games_return_training_examples(self) -> None:
+        net = _make_network()
+        config = SelfPlayConfig(num_games=2, num_simulations=1, max_moves=1, batch_size=2)
+        examples = play_games_batched(net, AnimalShogiState(), config, num_games=2)
+
+        assert len(examples) == 2
+        assert all(example.state_tensor.shape == (14, 4, 3) for example in examples)
+
 
 class TestGenerateTrainingData:
     def test_multiple_games(self) -> None:
@@ -73,7 +82,6 @@ class TestGenerateTrainingData:
 
         # 3 games, each game has multiple positions
         assert len(examples) >= 3
-
     @pytest.mark.slow
     def test_multiple_workers(self) -> None:
         net = _make_network()
