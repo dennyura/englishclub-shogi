@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import queue
 import threading
 
@@ -15,25 +14,24 @@ from shogi_ai.training.train_loop import (
 )
 
 
-def test_missing_model_stops_training_and_logs_reason(tmp_path, caplog) -> None:
-    """Training should stop before self-play when the model file is missing."""
+def test_missing_model_is_created_and_training_can_start(tmp_path) -> None:
+    """Training should create an initial checkpoint when the model file is missing."""
     progress_queue: queue.Queue[dict[str, object]] = queue.Queue()
     missing_path = tmp_path / "missing.pt"
-    config = TrainLoopConfig(model_path=str(missing_path))
+    config = TrainLoopConfig(model_path=str(missing_path), num_generations=0)
 
-    with caplog.at_level(logging.ERROR):
-        run_training(
-            AnimalShogiState(),
-            ANIMAL_SHOGI_CONFIG,
-            config,
-            progress_queue,
-            threading.Event(),
-        )
+    run_training(
+        AnimalShogiState(),
+        ANIMAL_SHOGI_CONFIG,
+        config,
+        progress_queue,
+        threading.Event(),
+    )
 
     message = progress_queue.get_nowait()
     assert message["type"] == "done"
-    assert message["reason"] == "model_not_found"
-    assert str(missing_path) in caplog.text
+    assert message["reason"] == "generation_limit"
+    assert missing_path.is_file()
 
 
 def test_num_res_blocks_can_be_overridden_by_loop_config() -> None:

@@ -4,13 +4,11 @@ uv run uvicorn shogi_ai.web.app:app --reload
  http://127.0.0.1:8000/
 
 
-import shutil
+## Kaggle での学習
 
-# コピー元（Input）とコピー先（Working）のパスを指定
-src = "/kaggle/input/datasets/dennyura/englishclub-shogi/best_model_animal.pt"
-dst = "/kaggle/working"
-
-shutil.copy("/kaggle/input/datasets/dennyura/englishclub-shogi/best_model_animal.pt", "/kaggle/working/")
+既存モデルから再開する場合だけ、Input から `.pt` ファイルを `/kaggle/working/` にコピーします。
+モデルがない場合は、`run_training()` がランダム初期化したネットワークから学習を開始し、
+指定した `model_path` に初期チェックポイントを新規作成します。
 
 ## config設定（どうぶつ将棋）
 

@@ -138,17 +138,6 @@ def run_training(
         raise ValueError("self_play_device_ids length must match self_play_workers")
 
     model_path = Path(loop_config.model_path)
-    if not model_path.is_file():
-        message = f"Training stopped: model file was not found: {model_path}"
-        logger.error(message)
-        progress_queue.put(
-            {
-                "type": "done",
-                "reason": "model_not_found",
-                "message": message,
-            }
-        )
-        return
 
     started_at = time.monotonic()
 
@@ -163,8 +152,13 @@ def run_training(
 
     # 最良モデルを初期化（または保存済みモデルから続きを再開）
     best_network = DualHeadNetwork(network_config).to(device)
-    state_dict = torch.load(model_path, map_location=device, weights_only=True)
-    best_network.load_state_dict(state_dict)
+    if model_path.is_file():
+        state_dict = torch.load(model_path, map_location=device, weights_only=True)
+        best_network.load_state_dict(state_dict)
+    else:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(best_network.state_dict(), model_path)
+        logger.info("Created initial model checkpoint: %s", model_path)
 
     trainer_config = TrainerConfig(
         buffer_size=loop_config.buffer_size,
