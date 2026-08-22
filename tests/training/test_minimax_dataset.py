@@ -100,3 +100,16 @@ def test_save_training_examples(tmp_path) -> None:
     assert data["state_tensors"].shape[1:] == (14, 4, 3)
     assert data["policy_targets"].shape[1:] == (180,)
     assert data["value_targets"].shape == (len(examples),)
+
+
+def test_generate_minimax_data_supports_multiple_workers() -> None:
+    examples = generate_minimax_data(
+        FullShogiState(),
+        num_games=2,
+        depth=1,
+        max_moves=1,
+        num_workers=2,
+    )
+
+    assert len(examples) == 2
+    assert all(example.state_tensor.shape == (43, 9, 9) for example in examples)

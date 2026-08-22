@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 import random
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from typing import NamedTuple
 
 import torch
 from torch import Tensor
@@ -12,6 +14,18 @@ from torch import Tensor
 from shogi_ai.engine.minimax import minimax_scores
 from shogi_ai.game.protocol import GameState
 from shogi_ai.training.self_play import TrainingExample
+
+
+class _MinimaxGameTask(NamedTuple):
+    """Pickleable arguments for one worker process."""
+
+    initial_state: GameState
+    depth: int
+    opening_moves: int
+    top_k: int
+    temperature: float
+    max_moves: int
+    seed: int
 
 
 def scores_to_policy(
@@ -124,15 +138,23 @@ def generate_minimax_data(
     top_k: int = 3,
     temperature: float = 100.0,
     max_moves: int = 512,
+    num_workers: int = 1,
 ) -> list[TrainingExample]:
-    """Generate examples from multiple Minimax-guided games."""
+    """Generate examples from multiple Minimax-guided games.
+
+    ``num_workers`` controls process-level parallelism. A value of 1 keeps the
+    generation in the caller process; larger values parallelize independent games.
+    """
     if num_games <= 0:
         raise ValueError("num_games must be positive")
+    if num_workers <= 0:
+        raise ValueError("num_workers must be positive")
 
-    examples: list[TrainingExample] = []
-    for _ in range(num_games):
-        examples.extend(
-            play_minimax_game(
+    if num_workers == 1:
+        return [
+            example
+            for _ in range(num_games)
+            for example in play_minimax_game(
                 initial_state,
                 depth,
                 opening_moves,
@@ -140,8 +162,40 @@ def generate_minimax_data(
                 temperature,
                 max_moves,
             )
+        ]
+
+    tasks = [
+        _MinimaxGameTask(
+            initial_state,
+            depth,
+            opening_moves,
+            top_k,
+            temperature,
+            max_moves,
+            random.randrange(2**63),
         )
+        for _ in range(num_games)
+    ]
+    worker_count = min(num_workers, num_games)
+    with ProcessPoolExecutor(max_workers=worker_count) as executor:
+        game_results = executor.map(_generate_minimax_game_worker, tasks)
+
+        examples = [example for game in game_results for example in game]
     return examples
+
+
+def _generate_minimax_game_worker(task: _MinimaxGameTask) -> list[TrainingExample]:
+    """Generate one game in a worker process."""
+    random.seed(task.seed)
+    torch.set_num_threads(1)
+    return play_minimax_game(
+        task.initial_state,
+        task.depth,
+        task.opening_moves,
+        task.top_k,
+        task.temperature,
+        task.max_moves,
+    )
 
 
 def save_training_examples(

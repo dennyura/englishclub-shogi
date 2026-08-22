@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--temperature", type=float, default=100.0)
     parser.add_argument("--max-moves", type=int, default=512)
+    parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--output", type=Path, default=Path("minimax_full_shogi.pt"))
     args = parser.parse_args()
 
@@ -28,6 +29,7 @@ def main() -> None:
         top_k=args.top_k,
         temperature=args.temperature,
         max_moves=args.max_moves,
+        num_workers=args.workers,
     )
     save_training_examples(examples, args.output)
     print(f"saved {len(examples)} examples to {args.output}")
