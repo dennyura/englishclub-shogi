@@ -82,6 +82,7 @@ class TestGenerateTrainingData:
 
         # 3 games, each game has multiple positions
         assert len(examples) >= 3
+
     @pytest.mark.slow
     def test_multiple_workers(self) -> None:
         net = _make_network()

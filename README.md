@@ -3,6 +3,13 @@ uv run uvicorn shogi_ai.web.app:app --reload
 
  http://127.0.0.1:8000/
 
+ import shutil
+
+src_file = "/kaggle/input/datasets/dennyura/englishclub-shogi/example.txt"
+dst_file = "/kaggle/working/example.txt"
+
+shutil.copy(src_file, dst_file)
+
 
 ## Kaggle での学習
 

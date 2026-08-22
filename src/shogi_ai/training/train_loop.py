@@ -28,7 +28,7 @@ from shogi_ai.engine.mcts import MCTS, MCTSConfig
 from shogi_ai.game.protocol import GameState
 from shogi_ai.model.config import NetworkConfig
 from shogi_ai.model.network import DualHeadNetwork
-from shogi_ai.training.arena import pit
+from shogi_ai.training.arena import pit_parallel
 from shogi_ai.training.self_play import SelfPlayConfig, generate_training_data
 from shogi_ai.training.trainer import ReplayBuffer, Trainer, TrainerConfig
 
@@ -52,6 +52,9 @@ class TrainLoopConfig:
         max_training_hours:   学習時間の上限（時間、Noneで無制限）
         model_path:           最良モデルの保存先パス
         num_res_blocks:       残差ブロック数（Noneならnetwork_configの値を使用）
+        self_play_batch_size: GPU推論へまとめて送る自己対局数
+        arena_workers: アリーナ対戦ワーカープロセス数
+        arena_device_ids: アリーナワーカーに割り当てるCUDAデバイス番号
     """
 
     num_generations: int = 10
@@ -68,6 +71,9 @@ class TrainLoopConfig:
     num_res_blocks: int | None = None
     self_play_workers: int = 1
     self_play_device_ids: tuple[int, ...] | None = None
+    self_play_batch_size: int = 8
+    arena_workers: int = 1
+    arena_device_ids: tuple[int, ...] | None = None
 
 
 def _get_device() -> torch.device:
@@ -131,6 +137,15 @@ def run_training(
         raise ValueError("num_res_blocks must be positive or None")
     if loop_config.self_play_workers <= 0:
         raise ValueError("self_play_workers must be positive")
+    if loop_config.self_play_batch_size <= 0:
+        raise ValueError("self_play_batch_size must be positive")
+    if loop_config.arena_workers <= 0:
+        raise ValueError("arena_workers must be positive")
+    if (
+        loop_config.arena_device_ids is not None
+        and len(loop_config.arena_device_ids) != loop_config.arena_workers
+    ):
+        raise ValueError("arena_device_ids length must match arena_workers")
     if (
         loop_config.self_play_device_ids is not None
         and len(loop_config.self_play_device_ids) != loop_config.self_play_workers
@@ -170,6 +185,7 @@ def run_training(
     self_play_config = SelfPlayConfig(
         num_games=loop_config.num_self_play_games,
         num_simulations=loop_config.num_simulations,
+        batch_size=loop_config.self_play_batch_size,
     )
 
     termination_reason = "generation_limit"
@@ -242,13 +258,18 @@ def run_training(
 
         new_network.eval()
         best_network.eval()
-        new_fn = _make_mcts_fn(new_network, loop_config.num_simulations)
-        old_fn = _make_mcts_fn(best_network, loop_config.num_simulations)
-        new_wins, old_wins, draws = pit(
-            new_fn,
-            old_fn,
+        new_wins, old_wins, draws = pit_parallel(
+            new_network,
+            best_network,
             initial_state,
             num_games=loop_config.arena_games,
+            num_simulations=loop_config.num_simulations,
+            num_workers=loop_config.arena_workers,
+            device_ids=(
+                list(loop_config.arena_device_ids)
+                if loop_config.arena_device_ids is not None
+                else None
+            ),
         )
         total = new_wins + old_wins + draws
         win_rate = new_wins / total if total > 0 else 0.0
@@ -292,6 +313,12 @@ def run_training(
             adopted,
             len(sampled_data),
             len(replay_buffer),
+        )
+        print(
+            f"Generation {generation + 1}/{loop_config.num_generations} completed: "
+            f"loss={losses['total_loss']:.4f}, win_rate={win_rate:.3f}, "
+            f"adopted={adopted}, data={len(sampled_data)}",
+            flush=True,
         )
 
         if time_limit_reached():
