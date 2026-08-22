@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from shogi_ai.game.animal_shogi.state import AnimalShogiState
 from shogi_ai.model.config import ANIMAL_SHOGI_CONFIG
 from shogi_ai.model.network import DualHeadNetwork
@@ -71,3 +73,16 @@ class TestGenerateTrainingData:
 
         # 3 games, each game has multiple positions
         assert len(examples) >= 3
+
+    @pytest.mark.slow
+    def test_multiple_workers(self) -> None:
+        net = _make_network()
+        config = SelfPlayConfig(num_games=2, num_simulations=1, max_moves=1)
+        examples = generate_training_data(
+            net,
+            AnimalShogiState(),
+            config,
+            num_workers=2,
+        )
+
+        assert len(examples) == 2

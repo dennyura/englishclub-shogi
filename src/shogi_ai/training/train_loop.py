@@ -66,6 +66,8 @@ class TrainLoopConfig:
     max_training_hours: float | None = None
     model_path: str = "best_model.pt"
     num_res_blocks: int | None = None
+    self_play_workers: int = 1
+    self_play_device_ids: tuple[int, ...] | None = None
 
 
 def _get_device() -> torch.device:
@@ -127,6 +129,13 @@ def run_training(
         raise ValueError("max_training_hours must be positive or None")
     if loop_config.num_res_blocks is not None and loop_config.num_res_blocks <= 0:
         raise ValueError("num_res_blocks must be positive or None")
+    if loop_config.self_play_workers <= 0:
+        raise ValueError("self_play_workers must be positive")
+    if (
+        loop_config.self_play_device_ids is not None
+        and len(loop_config.self_play_device_ids) != loop_config.self_play_workers
+    ):
+        raise ValueError("self_play_device_ids length must match self_play_workers")
 
     model_path = Path(loop_config.model_path)
     if not model_path.is_file():
@@ -189,7 +198,17 @@ def run_training(
         )
 
         best_network.eval()
-        data = generate_training_data(best_network, initial_state, self_play_config)
+        data = generate_training_data(
+            best_network,
+            initial_state,
+            self_play_config,
+            num_workers=loop_config.self_play_workers,
+            device_ids=(
+                list(loop_config.self_play_device_ids)
+                if loop_config.self_play_device_ids is not None
+                else None
+            ),
+        )
         replay_buffer.add(data)
         sampled_data = replay_buffer.sample(trainer_config.samples_per_generation)
 

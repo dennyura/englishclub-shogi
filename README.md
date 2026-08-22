@@ -26,6 +26,8 @@ config = TrainLoopConfig(
     epochs_per_generation=5,
     max_training_hours=8,
     num_res_blocks=5,
+    self_play_workers=2,
+    self_play_device_ids=(0, 1),
     model_path="/kaggle/working/best_model_animal.pt",
 )
 
@@ -38,7 +40,7 @@ FULL_SHOGI_CONFIG = NetworkConfig(
     num_channels=128,
 )
 
-## config設定（どうぶつ将棋）
+## config設定（本将棋）
 config = TrainLoopConfig(
     num_generations=,
     num_self_play_games=1000, # ~3000
@@ -51,6 +53,8 @@ config = TrainLoopConfig(
     epochs_per_generation=1,
     max_training_hours=11,
     num_res_blocks=15,
+    self_play_workers=2,
+    self_play_device_ids=(0, 1),
     model_path="/kaggle/working/best_model_animal.pt",
 )
 
@@ -63,6 +67,16 @@ FULL_SHOGI_CONFIG = NetworkConfig(
     num_channels=192,
 )
 
+# 棋譜生成
+python scripts/generate_minimax_dataset.py \
+  --games 10000 \
+  --depth 2 \
+  --opening-moves 6 \
+  --top-k 3 \
+  --temperature 100 \
+  --max-moves 512 \
+  --workers 4 \
+  --output minimax_full_shogi.pt
 
 ## ライセンス
 

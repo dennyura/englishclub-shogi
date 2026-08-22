@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import multiprocessing as mp
+import random
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -10,6 +13,7 @@ from torch import Tensor
 
 from shogi_ai.engine.mcts import MCTS, MCTSConfig
 from shogi_ai.game.protocol import GameState
+from shogi_ai.model.config import NetworkConfig
 from shogi_ai.model.network import DualHeadNetwork
 
 
@@ -35,6 +39,19 @@ class SelfPlayConfig:
     num_games: int = 20
     num_simulations: int = 50
     temperature_threshold: int = 10  # この手数以降は温度を下げて最善手を選ぶ
+    max_moves: int = 200
+
+
+class _SelfPlayTask(NamedTuple):
+    """Pickleable arguments for a self-play worker process."""
+
+    network_config: NetworkConfig
+    state_dict: dict[str, Tensor]
+    initial_state: GameState
+    config: SelfPlayConfig
+    num_games: int
+    device: str
+    seed: int
 
 
 def play_game(
@@ -60,7 +77,7 @@ def play_game(
     mcts = MCTS(network, mcts_config)
 
     move_count = 0
-    max_moves = 200  # 無限ループ防止（引き分けとして扱う）
+    max_moves = config.max_moves  # 無限ループ防止（引き分けとして扱う）
 
     while not state.is_terminal and move_count < max_moves:
         # 温度スケジュール: 序盤は探索的、中盤以降は最善手を選ぶ
@@ -109,16 +126,69 @@ def generate_training_data(
     network: DualHeadNetwork,
     initial_state: GameState,
     config: SelfPlayConfig,
+    num_workers: int = 1,
+    device_ids: list[int] | None = None,
 ) -> list[TrainingExample]:
     """Generate training data from multiple self-play games.
 
     複数の自己対局を行い、訓練データをまとめて返す。
+    ``num_workers > 1`` では独立したゲームをプロセス並列化する。
+    CUDA使用時は ``device_ids`` のGPUを各ワーカーへ1枚ずつ割り当てる。
     """
-    all_examples: list[TrainingExample] = []
-    for _ in range(config.num_games):
-        examples = play_game(network, initial_state, config)
-        all_examples.extend(examples)
-    return all_examples
+    if num_workers <= 0:
+        raise ValueError("num_workers must be positive")
+    if device_ids is not None and len(device_ids) != num_workers:
+        raise ValueError("device_ids length must match num_workers")
+    if device_ids is not None:
+        if not torch.cuda.is_available():
+            raise ValueError("device_ids requires CUDA to be available")
+        device_count = torch.cuda.device_count()
+        if any(device_id < 0 or device_id >= device_count for device_id in device_ids):
+            raise ValueError(f"device_ids must be between 0 and {device_count - 1}")
+
+    if num_workers == 1:
+        return [
+            example
+            for _ in range(config.num_games)
+            for example in play_game(network, initial_state, config)
+        ]
+
+    devices = ["cpu"] * num_workers if device_ids is None else [
+        f"cuda:{device_id}" for device_id in device_ids
+    ]
+    state_dict = {name: value.detach().cpu() for name, value in network.state_dict().items()}
+    tasks = [
+        _SelfPlayTask(
+            network.config,
+            state_dict,
+            initial_state,
+            config,
+            config.num_games // num_workers + (index < config.num_games % num_workers),
+            device,
+            random.randrange(2**63),
+        )
+        for index, device in enumerate(devices)
+    ]
+    tasks = [task for task in tasks if task.num_games > 0]
+    context = mp.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=len(tasks), mp_context=context) as executor:
+        results = executor.map(_self_play_worker, tasks)
+        return [example for worker_examples in results for example in worker_examples]
+
+
+def _self_play_worker(task: _SelfPlayTask) -> list[TrainingExample]:
+    """Run a batch of self-play games in one CPU/GPU worker."""
+    random.seed(task.seed)
+    torch.set_num_threads(1)
+    device = torch.device(task.device)
+    network = DualHeadNetwork(task.network_config).to(device)
+    network.load_state_dict(task.state_dict)
+    network.eval()
+
+    examples: list[TrainingExample] = []
+    for _ in range(task.num_games):
+        examples.extend(play_game(network, task.initial_state, task.config))
+    return examples
 
 
 def _select_move(action_probs: list[float], legal_moves: list[int]) -> int:
