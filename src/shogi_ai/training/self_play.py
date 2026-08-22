@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import multiprocessing as mp
 import random
 from concurrent.futures import ProcessPoolExecutor
@@ -32,6 +33,16 @@ class TrainingExample(NamedTuple):
     value_target: float  # +1 (win) / -1 (loss) / 0 (draw)
 
 
+class _SerializedTrainingExample(NamedTuple):
+    """A training example that does not use PyTorch shared-memory IPC."""
+
+    state_bytes: bytes
+    state_shape: tuple[int, ...]
+    policy_bytes: bytes
+    policy_shape: tuple[int, ...]
+    value_target: float
+
+
 @dataclass(frozen=True)
 class SelfPlayConfig:
     """Configuration for self-play data generation."""
@@ -47,7 +58,7 @@ class _SelfPlayTask(NamedTuple):
     """Pickleable arguments for a self-play worker process."""
 
     network_config: NetworkConfig
-    state_dict: dict[str, Tensor]
+    state_dict_bytes: bytes
     initial_state: GameState
     config: SelfPlayConfig
     num_games: int
@@ -218,10 +229,13 @@ def generate_training_data(
         f"cuda:{device_id}" for device_id in device_ids
     ]
     state_dict = {name: value.detach().cpu() for name, value in network.state_dict().items()}
+    state_dict_buffer = io.BytesIO()
+    torch.save(state_dict, state_dict_buffer)
+    state_dict_bytes = state_dict_buffer.getvalue()
     tasks = [
         _SelfPlayTask(
             network.config,
-            state_dict,
+            state_dict_bytes,
             initial_state,
             config,
             config.num_games // num_workers + (index < config.num_games % num_workers),
@@ -234,19 +248,55 @@ def generate_training_data(
     context = mp.get_context("spawn")
     with ProcessPoolExecutor(max_workers=len(tasks), mp_context=context) as executor:
         results = executor.map(_self_play_worker, tasks)
-        return [example for worker_examples in results for example in worker_examples]
+        return [
+            _deserialize_training_example(example)
+            for worker_examples in results
+            for example in worker_examples
+        ]
 
 
-def _self_play_worker(task: _SelfPlayTask) -> list[TrainingExample]:
+def _self_play_worker(task: _SelfPlayTask) -> list[_SerializedTrainingExample]:
     """Run a batch of self-play games in one CPU/GPU worker."""
     random.seed(task.seed)
     torch.set_num_threads(1)
     device = torch.device(task.device)
     network = DualHeadNetwork(task.network_config).to(device)
-    network.load_state_dict(task.state_dict)
+    state_dict = torch.load(
+        io.BytesIO(task.state_dict_bytes),
+        map_location=device,
+        weights_only=True,
+    )
+    network.load_state_dict(state_dict)
     network.eval()
 
-    return play_games_batched(network, task.initial_state, task.config, task.num_games)
+    examples = play_games_batched(network, task.initial_state, task.config, task.num_games)
+    return [_serialize_training_example(example) for example in examples]
+
+
+def _serialize_training_example(example: TrainingExample) -> _SerializedTrainingExample:
+    """Serialize tensors as bytes to avoid PyTorch shared-memory handles."""
+    state_tensor = example.state_tensor.detach().cpu().contiguous()
+    policy_tensor = example.policy_target.detach().cpu().contiguous()
+    return _SerializedTrainingExample(
+        state_tensor.numpy().tobytes(),
+        tuple(state_tensor.shape),
+        policy_tensor.numpy().tobytes(),
+        tuple(policy_tensor.shape),
+        example.value_target,
+    )
+
+
+def _deserialize_training_example(
+    example: _SerializedTrainingExample,
+) -> TrainingExample:
+    """Restore a serialized self-play example in the parent process."""
+    state_tensor = torch.frombuffer(bytearray(example.state_bytes), dtype=torch.float32).reshape(
+        example.state_shape
+    )
+    policy_tensor = torch.frombuffer(bytearray(example.policy_bytes), dtype=torch.float32).reshape(
+        example.policy_shape
+    )
+    return TrainingExample(state_tensor, policy_tensor, example.value_target)
 
 
 def _select_move(action_probs: list[float], legal_moves: list[int]) -> int:

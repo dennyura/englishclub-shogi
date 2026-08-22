@@ -55,6 +55,8 @@ class TrainLoopConfig:
         self_play_batch_size: GPU推論へまとめて送る自己対局数
         arena_workers: アリーナ対戦ワーカープロセス数
         arena_device_ids: アリーナワーカーに割り当てるCUDAデバイス番号
+        checkpoint_callback: 採用モデルを保存した直後に呼ぶコールバック
+        log_callback: 全学習完了時に学習ログを渡すコールバック
     """
 
     num_generations: int = 10
@@ -74,6 +76,8 @@ class TrainLoopConfig:
     self_play_batch_size: int = 8
     arena_workers: int = 1
     arena_device_ids: tuple[int, ...] | None = None
+    checkpoint_callback: Callable[[Path], None] | None = None
+    log_callback: Callable[[str], None] | None = None
 
 
 def _get_device() -> torch.device:
@@ -189,6 +193,7 @@ def run_training(
     )
 
     termination_reason = "generation_limit"
+    log_lines: list[str] = []
     for generation in range(loop_config.num_generations):
         if stop_event.is_set():
             progress_queue.put({"type": "stopped"})
@@ -279,6 +284,8 @@ def run_training(
         if adopted:
             best_network = new_network
             torch.save(best_network.state_dict(), model_path)
+            if loop_config.checkpoint_callback is not None:
+                loop_config.checkpoint_callback(model_path)
 
         progress_queue.put(
             {
@@ -297,7 +304,7 @@ def run_training(
                 "buffer_size": len(replay_buffer),
             }
         )
-        logger.info(
+        generation_log = (
             "Generation %d/%d completed: policy_loss=%.4f, value_loss=%.4f, "
             "total_loss=%.4f, new_wins=%d, old_wins=%d, draws=%d, win_rate=%.3f, "
             "adopted=%s, data_size=%d, buffer_size=%d",
@@ -314,6 +321,8 @@ def run_training(
             len(sampled_data),
             len(replay_buffer),
         )
+        log_lines.append(generation_log)
+        logger.info(generation_log)
         print(
             f"Generation {generation + 1}/{loop_config.num_generations} completed: "
             f"loss={losses['total_loss']:.4f}, win_rate={win_rate:.3f}, "
@@ -325,4 +334,7 @@ def run_training(
             termination_reason = "time_limit"
             break
 
+    log_lines.append(f"Training completed: reason={termination_reason}")
+    if loop_config.log_callback is not None:
+        loop_config.log_callback("\n".join(log_lines) + "\n")
     progress_queue.put({"type": "done", "reason": termination_reason})
